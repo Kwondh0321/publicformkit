@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "publicformkit"
+version = "0.1.0"
+description = "Convert public PDF, HWPX, HTML, and text forms to reviewable JSON Schema and accessible HTML"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Kwondh0321" }]
+dependencies = ["pypdf>=5,<7"]
+keywords = ["public-forms", "accessibility", "json-schema", "pdf", "hwpx"]
+
+[project.scripts]
+publicformkit = "publicformkit.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
