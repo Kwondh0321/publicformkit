@@ -13,19 +13,36 @@ from xml.etree import ElementTree
 
 from pypdf import PdfReader
 
-
-FIELD_LINE = re.compile(r"^\s*(?:[-•]\s*)?(.{1,80}?)(\*|\s*\((?:필수|required)\))?\s*(?::|：|_{2,}|\[\s*\])\s*(.*)$", re.IGNORECASE)
+FIELD_LINE = re.compile(
+    r"^\s*(?:[-•]\s*)?(.{1,80}?)(\*|\s*\((?:필수|required)\))?\s*(?::|：|_{2,}|\[\s*\])\s*(.*)$",
+    re.IGNORECASE,
+)
+MAX_HWPX_XML_BYTES = 20 * 1024 * 1024
 
 
 def _hwpx_text(path: Path) -> str:
     parts = []
     with zipfile.ZipFile(path) as archive:
-        names = sorted(name for name in archive.namelist() if name.startswith("Contents/") and name.endswith(".xml"))
-        if not names:
+        entries = sorted(
+            (
+                item
+                for item in archive.infolist()
+                if item.filename.startswith("Contents/")
+                and item.filename.endswith(".xml")
+            ),
+            key=lambda item: item.filename,
+        )
+        if not entries:
             raise ValueError("HWPX archive has no Contents XML files")
-        for name in names:
-            root = ElementTree.fromstring(archive.read(name))
-            text = "".join(node.text or "" for node in root.iter() if node.tag.rsplit("}", 1)[-1] in {"t", "text"})
+        if sum(item.file_size for item in entries) > MAX_HWPX_XML_BYTES:
+            raise ValueError(f"HWPX Contents XML exceeds {MAX_HWPX_XML_BYTES} bytes")
+        for item in entries:
+            root = ElementTree.fromstring(archive.read(item))
+            text = "".join(
+                node.text or ""
+                for node in root.iter()
+                if node.tag.rsplit("}", 1)[-1] in {"t", "text"}
+            )
             if text.strip():
                 parts.append(text)
     return "\n".join(parts)
@@ -34,14 +51,20 @@ def _hwpx_text(path: Path) -> str:
 def _html_text(path: Path) -> str:
     source = path.read_text(encoding="utf-8", errors="replace")
     source = re.sub(r"<(script|style)\b[\s\S]*?</\1>", " ", source, flags=re.IGNORECASE)
-    source = re.sub(r"<br\s*/?>|</(?:p|div|label|li|tr)>", "\n", source, flags=re.IGNORECASE)
+    source = re.sub(
+        r"<br\s*/?>|</(?:p|div|label|li|tr)>", "\n", source, flags=re.IGNORECASE
+    )
     return html.unescape(re.sub(r"<[^>]+>", " ", source))
 
 
 def extract_text(path: Path) -> tuple[str, dict[str, Any]]:
     """Extract text and available native field metadata."""
     suffix = path.suffix.lower()
-    metadata: dict[str, Any] = {"source": str(path), "format": suffix.lstrip("."), "native_fields": []}
+    metadata: dict[str, Any] = {
+        "source": path.name,
+        "format": suffix.lstrip("."),
+        "native_fields": [],
+    }
     if suffix == ".pdf":
         reader = PdfReader(path)
         text = "\n".join(page.extract_text() or "" for page in reader.pages)
@@ -51,7 +74,9 @@ def extract_text(path: Path) -> tuple[str, dict[str, Any]]:
     if suffix == ".hwpx":
         return _hwpx_text(path), metadata
     if suffix == ".hwp":
-        raise ValueError("legacy binary HWP is not supported; save or convert it to HWPX first")
+        raise ValueError(
+            "legacy binary HWP is not supported; save or convert it to HWPX first"
+        )
     if suffix in {".html", ".htm"}:
         return _html_text(path), metadata
     if suffix in {".txt", ".md"}:
@@ -60,7 +85,12 @@ def extract_text(path: Path) -> tuple[str, dict[str, Any]]:
 
 
 def _slug(label: str, index: int) -> str:
-    normalized = unicodedata.normalize("NFKD", label).encode("ascii", "ignore").decode("ascii").lower()
+    normalized = (
+        unicodedata.normalize("NFKD", label)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .lower()
+    )
     value = re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
     return value[:50] or f"field_{index}"
 
@@ -73,12 +103,17 @@ def _field_type(label: str) -> tuple[str, str | None]:
         return "string", "date"
     if any(token in lower for token in ("phone", "mobile", "tel", "전화", "휴대폰")):
         return "string", "tel"
-    if any(token in lower for token in ("amount", "count", "number", "금액", "수량", "인원")):
+    if any(
+        token in lower
+        for token in ("amount", "count", "number", "금액", "수량", "인원")
+    ):
         return "number", None
     return "string", None
 
 
-def infer_fields(text: str, native_fields: list[str] | None = None) -> list[dict[str, Any]]:
+def infer_fields(
+    text: str, native_fields: list[str] | None = None
+) -> list[dict[str, Any]]:
     """Infer reviewable fields from common printed-form patterns."""
     fields = []
     seen: set[str] = set()
@@ -97,6 +132,7 @@ def infer_fields(text: str, native_fields: list[str] | None = None) -> list[dict
             key = f"{key}_{len(fields) + 1}"
         seen.add(key)
         value_type, input_type = _field_type(label)
+        source_value = match.group(3).strip()
         fields.append(
             {
                 "name": key,
@@ -104,7 +140,10 @@ def infer_fields(text: str, native_fields: list[str] | None = None) -> list[dict
                 "type": value_type,
                 "input_type": input_type,
                 "required": bool(match.group(2)),
-                "hint": match.group(3).strip() or None,
+                # Text after a field delimiter may be a person's filled-in data.
+                # Record only its presence so generated files cannot leak it.
+                "hint": None,
+                "source_value_redacted": bool(source_value),
                 "confidence": 0.8 if match.group(2) or ":" in compact else 0.65,
             }
         )
@@ -115,7 +154,11 @@ def build_schema(title: str, fields: list[dict[str, Any]]) -> dict[str, Any]:
     properties = {}
     required = []
     for field in fields:
-        value: dict[str, Any] = {"type": field["type"], "title": field["label"], "x-inference-confidence": field["confidence"]}
+        value: dict[str, Any] = {
+            "type": field["type"],
+            "title": field["label"],
+            "x-inference-confidence": field["confidence"],
+        }
         if field["input_type"] == "email":
             value["format"] = "email"
         elif field["input_type"] == "date":
@@ -125,7 +168,13 @@ def build_schema(title: str, fields: list[dict[str, Any]]) -> dict[str, Any]:
         properties[field["name"]] = value
         if field["required"]:
             required.append(field["name"])
-    schema: dict[str, Any] = {"$schema": "https://json-schema.org/draft/2020-12/schema", "title": title, "type": "object", "properties": properties, "additionalProperties": False}
+    schema: dict[str, Any] = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": title,
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": False,
+    }
     if required:
         schema["required"] = required
     return schema
@@ -134,13 +183,19 @@ def build_schema(title: str, fields: list[dict[str, Any]]) -> dict[str, Any]:
 def render_html(title: str, fields: list[dict[str, Any]]) -> str:
     controls = []
     for field in fields:
-        required = " required aria-required=\"true\"" if field["required"] else ""
+        required = ' required aria-required="true"' if field["required"] else ""
         description_id = f"{field['name']}-hint"
-        describedby = f" aria-describedby=\"{description_id}\"" if field["hint"] else ""
-        input_type = field["input_type"] or ("number" if field["type"] == "number" else "text")
-        hint = f"\n      <p id=\"{description_id}\" class=\"hint\">{html.escape(field['hint'])}</p>" if field["hint"] else ""
+        describedby = f' aria-describedby="{description_id}"' if field["hint"] else ""
+        input_type = field["input_type"] or (
+            "number" if field["type"] == "number" else "text"
+        )
+        hint = (
+            f'\n      <p id="{description_id}" class="hint">{html.escape(field["hint"])}</p>'
+            if field["hint"]
+            else ""
+        )
         controls.append(
-            f"    <div class=\"field\">\n      <label for=\"{field['name']}\">{html.escape(field['label'])}</label>{hint}\n      <input id=\"{field['name']}\" name=\"{field['name']}\" type=\"{input_type}\"{required}{describedby}>\n    </div>"
+            f'    <div class="field">\n      <label for="{field["name"]}">{html.escape(field["label"])}</label>{hint}\n      <input id="{field["name"]}" name="{field["name"]}" type="{input_type}"{required}{describedby}>\n    </div>'
         )
     return "\n".join(
         [
@@ -154,10 +209,10 @@ def render_html(title: str, fields: list[dict[str, Any]]) -> str:
             "</head>",
             "<body>",
             f"  <main><h1>{html.escape(title)}</h1>",
-            "  <p><strong>Review required:</strong> fields were inferred automatically from a source document.</p>",
-            "  <form method=\"post\">",
+            "  <p><strong>검토 필요:</strong> 원본 문서에서 필드를 자동으로 추론했으며 입력된 값은 복사하지 않았습니다.</p>",
+            '  <form method="post">',
             *controls,
-            "    <button type=\"submit\">제출</button>",
+            '    <button type="submit">제출</button>',
             "  </form></main>",
             "</body>",
             "</html>",
@@ -175,9 +230,22 @@ def convert_form(path: Path, output_dir: Path) -> dict[str, Any]:
     schema_path = output_dir / "form.schema.json"
     html_path = output_dir / "form.html"
     review_path = output_dir / "review.json"
-    schema_path.write_text(json.dumps(schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    schema_path.write_text(
+        json.dumps(schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     html_path.write_text(render_html(title, fields), encoding="utf-8")
-    review = {**metadata, "fields": fields, "field_count": len(fields), "notice": "Every inferred field, label, type, required flag, and legal basis requires human review."}
-    review_path.write_text(json.dumps(review, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return {"schema": str(schema_path), "html": str(html_path), "review": str(review_path), "field_count": len(fields)}
-
+    review = {
+        **metadata,
+        "fields": fields,
+        "field_count": len(fields),
+        "notice": "추론한 필드, 레이블, 자료형, 필수 여부와 법적 근거를 모두 사람이 검토해야 합니다.",
+    }
+    review_path.write_text(
+        json.dumps(review, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return {
+        "schema": str(schema_path),
+        "html": str(html_path),
+        "review": str(review_path),
+        "field_count": len(fields),
+    }

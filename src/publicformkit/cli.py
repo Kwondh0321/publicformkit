@@ -7,11 +7,17 @@ import json
 import sys
 from pathlib import Path
 
+from . import __version__
 from .core import convert_form
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="공공서식을 JSON Schema와 접근 가능한 HTML 초안으로 변환합니다.")
+    parser = argparse.ArgumentParser(
+        description="공공서식을 JSON Schema와 접근 가능한 HTML 초안으로 변환합니다."
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
+    )
     parser.add_argument("source", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("publicform-output"))
     args = parser.parse_args(argv)

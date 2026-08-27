@@ -13,9 +13,16 @@ authors = [{ name = "Kwondh0321" }]
 dependencies = ["pypdf>=5,<7"]
 keywords = ["public-forms", "accessibility", "json-schema", "pdf", "hwpx"]
 
+[project.optional-dependencies]
+dev = ["ruff==0.16.4"]
+
+[project.urls]
+Homepage = "https://github.com/Kwondh0321/publicformkit"
+Repository = "https://github.com/Kwondh0321/publicformkit.git"
+Issues = "https://github.com/Kwondh0321/publicformkit/issues"
+
 [project.scripts]
 publicformkit = "publicformkit.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-

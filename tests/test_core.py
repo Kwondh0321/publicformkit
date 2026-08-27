@@ -19,7 +19,10 @@ class PublicFormKitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "form.hwpx"
             with zipfile.ZipFile(path, "w") as archive:
-                archive.writestr("Contents/section0.xml", '<root xmlns:hp="urn:test"><hp:t>성명: ______</hp:t></root>')
+                archive.writestr(
+                    "Contents/section0.xml",
+                    '<root xmlns:hp="urn:test"><hp:t>성명: ______</hp:t></root>',
+                )
             text, metadata = extract_text(path)
             self.assertIn("성명", text)
             self.assertEqual("hwpx", metadata["format"])
@@ -28,7 +31,9 @@ class PublicFormKitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "application.txt"
-            source.write_text("성명(필수):\n이메일: example@example.org\n", encoding="utf-8")
+            source.write_text(
+                "성명(필수):\n이메일: example@example.org\n", encoding="utf-8"
+            )
             result = convert_form(source, root / "out")
             self.assertEqual(2, result["field_count"])
             html = (root / "out" / "form.html").read_text(encoding="utf-8")
@@ -36,7 +41,27 @@ class PublicFormKitTests(unittest.TestCase):
             self.assertIn("aria-required", html)
             self.assertEqual(0, main([str(source), "--output-dir", str(root / "cli")]))
 
+    def test_redacts_filled_values_from_generated_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "filled.txt"
+            source.write_text("이메일: private.person@example.org\n", encoding="utf-8")
+            output = root / "out"
+            result = convert_form(source, output)
+            combined = (
+                (output / "form.schema.json").read_text(encoding="utf-8")
+                + (output / "form.html").read_text(encoding="utf-8")
+                + (output / "review.json").read_text(encoding="utf-8")
+            )
+            self.assertNotIn("private.person@example.org", combined)
+            self.assertTrue(result["field_count"])
+            self.assertEqual(
+                "filled.txt",
+                __import__("json").loads(
+                    (output / "review.json").read_text(encoding="utf-8")
+                )["source"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
-
