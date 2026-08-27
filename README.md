@@ -1,6 +1,6 @@
 # PublicFormKit
 
-한국어 | [English](README.en.md)
+한국어 | [English](README.en.md) | [변경 기록 / Changelog](CHANGELOG.md)
 
 PublicFormKit은 공공 PDF·HWPX·HTML·Markdown·텍스트 서식을 JSON Schema, 접근 가능한 HTML 양식, 필드별 검토 보고서로 변환합니다. 모델 없이 규칙으로 추론해 결과를 사람이 확인할 수 있게 합니다.
 

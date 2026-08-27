@@ -1,6 +1,6 @@
 # PublicFormKit
 
-[한국어](README.md) | English
+[한국어](README.md) | English | [Changelog / 변경 기록](CHANGELOG.md)
 
 PublicFormKit converts public PDF, HWPX, HTML, Markdown, and text forms into a JSON Schema, an accessible HTML draft, and a field-level review report. It uses deterministic rules without a model so every inference remains reviewable.
 
